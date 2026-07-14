@@ -2,3 +2,9 @@
 .next/
 backend/venv/
 backend/.env
+**/__pycache__/
+*.pyc
+
+# 런타임에 업로드되는 원장 파일은 무시하되, 샘플 데이터는 유지한다.
+backend/temp_files/*
+!backend/temp_files/fdd_sample_general_ledger_300.csv
