@@ -2,7 +2,8 @@
 
 import React, { useState } from 'react';
 import { useAuditStore, ColumnMapping } from './store';
-import { Columns, CheckCircle } from 'lucide-react';
+import { Columns } from 'lucide-react';
+import { apiUrl } from './lib/api';
 
 interface MappingModalProps {
   isOpen: boolean;
@@ -11,11 +12,16 @@ interface MappingModalProps {
 
 export default function MappingModal({ isOpen, onClose }: MappingModalProps) {
   const { availableColumns, setMapping, uploadedFileName } = useAuditStore();
-  
-  const [localMapping, setLocalMapping] = useState<ColumnMapping>({
-    doc_num: '', date: '', account_code: '', vendor: '', 
+
+  // 원본 CSV에 전표번호 열이 없을 경우, 업로드 시 백엔드가 자동 생성한 _row_id를
+  // 기본값으로 미리 선택해 회계사의 매핑 작업을 줄여준다. (page.tsx에서 파일 업로드마다
+  // key={uploadedFileName} 로 이 컴포넌트를 새로 마운트하므로, 최초 상태 계산에만
+  // availableColumns를 참조해도 안전하다.)
+  const [localMapping, setLocalMapping] = useState<ColumnMapping>(() => ({
+    doc_num: availableColumns.includes('_row_id') ? '_row_id' : '',
+    date: '', account_code: '', vendor: '',
     debit_amt: '', credit_amt: '', desc: ''
-  });
+  }));
 
   if (!isOpen) return null;
 
@@ -32,7 +38,7 @@ export default function MappingModal({ isOpen, onClose }: MappingModalProps) {
     setMapping(localMapping);
     
     try {
-      const res = await fetch('http://localhost:8000/api/query-test', {
+      const res = await fetch(apiUrl('/api/query-test'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -49,24 +55,24 @@ export default function MappingModal({ isOpen, onClose }: MappingModalProps) {
         }),
       });
       
-      if (!res.ok) throw new Error('백엔드 응답 실패');
-      
       const result = await res.json();
+      if (!res.ok) throw new Error(result.detail || '백엔드 응답 실패');
+
       const parsedData = JSON.parse(result.data);
       
       // Zustand 스토어에 데이터 반영 (여기서 데이터가 채워짐!)
       useAuditStore.getState().setGlobalData(parsedData);
       
-      alert('분석 데이터 로드 완료!');
       onClose();
     } catch (e) {
       console.error(e);
-      alert('데이터 로드 실패: CSV 헤더를 다시 확인해 주세요.');
+      const message = e instanceof Error ? e.message : '알 수 없는 오류';
+      alert(`데이터 로드 실패: ${message}`);
     }
   };
 
   const fields: { key: keyof ColumnMapping; label: string; desc: string }[] = [
-    { key: 'doc_num', label: '전표번호', desc: '고유 전표 번호 열' },
+    { key: 'doc_num', label: '전표번호', desc: '고유 전표 번호 열 (없다면 자동 생성된 _row_id 선택)' },
     { key: 'date', label: '전기일자', desc: '날짜 열 (YYYY-MM-DD)' },
     { key: 'account_code', label: '계정과목', desc: '계정 명칭/코드 열' },
     { key: 'vendor', label: '거래처', desc: '거래처명 열' },
@@ -94,6 +100,7 @@ export default function MappingModal({ isOpen, onClose }: MappingModalProps) {
                 <option value="">-- 선택 --</option>
                 {availableColumns.map((col) => <option key={col} value={col}>{col}</option>)}
               </select>
+              <span className="text-xs text-slate-500 mt-1">{f.desc}</span>
             </div>
           ))}
         </div>

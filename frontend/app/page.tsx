@@ -1,29 +1,39 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { useAuditStore } from './store';
+import { AgGridReact } from 'ag-grid-react';
+import { useAuditStore, JournalEntry } from './store';
 import { Bot, BarChart3, TableProperties, Upload, FileSpreadsheet, Send, RotateCcw } from 'lucide-react';
 import MappingModal from './MappingModal';
 import LedgerGrid from './LedgerGrid';
+import FraudSidebar from './components/FraudSidebar';
+import Visualization, { DynamicChart } from './components/Visualization';
+import { apiUrl } from './lib/api';
 
 export default function AuditDashboard() {
-  const { uploadedFileName, setUploadInfo, mapping, setVendorFilter, setGlobalData } = useAuditStore();
+  const {
+    uploadedFileName,
+    setUploadInfo,
+    mapping,
+    setVendorFilter,
+    setGlobalData,
+    globalData,
+    setFraudCheckRunning,
+    setFraudResult,
+    clearFraudResult,
+  } = useAuditStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  
+
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
-    { role: 'assistant', content: '안녕하세요, 회계사님! \n매출 원장을 분석할 준비가 되었습니다.\n\n💡 추천 명령:\n1. "전기일자 6월 삼성전자 거래처를 추출해줘"\n2. "이걸 다시 월별 추이액 차트로 그려줘"' }
+    { role: 'assistant', content: '안녕하세요, 회계사님! \n원장을 분석할 준비가 되었습니다.\n\n💡 추천 명령:\n1. "전기일자 6월 삼성전자 거래처를 추출해줘"\n2. "이걸 다시 월별 추이액 차트로 그려줘"' }
   ]);
   const [input, setInput] = useState('');
   const [isAiThinking, setIsAiThinking] = useState(false);
-  
-  const [dynamicChart, setDynamicChart] = useState<{
-    type: string;
-    title: string;
-    data: { x: string; y: number }[];
-  } | null>(null);
 
-  const gridRef = useRef<any>(null);
+  const [dynamicChart, setDynamicChart] = useState<DynamicChart | null>(null);
+
+  const gridRef = useRef<AgGridReact<JournalEntry>>(null);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -34,35 +44,75 @@ export default function AuditDashboard() {
     formData.append('file', file);
 
     try {
-      const res = await fetch('http://localhost:8000/api/upload', {
+      const res = await fetch(apiUrl('/api/upload'), {
         method: 'POST',
         body: formData,
       });
-      if (!res.ok) throw new Error('업로드 실패');
       const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || '업로드 실패');
+
+      clearFraudResult();
+      setDynamicChart(null);
       setUploadInfo(data.file_name, data.columns);
       setIsModalOpen(true);
     } catch (error) {
-      alert('백엔드 통신 실패');
+      const message = error instanceof Error ? error.message : '알 수 없는 오류';
+      alert(`백엔드 통신 실패: ${message}\n(백엔드 서버가 http://localhost:8000 에서 실행 중인지 확인해 주세요.)`);
     } finally {
       setIsUploading(false);
+      e.target.value = '';
     }
   };
 
   const handleResetFilters = () => {
     setVendorFilter(null);
+    clearFraudResult();
     if (gridRef.current && gridRef.current.api) {
       gridRef.current.api.setFilterModel(null);
     }
     setDynamicChart(null);
   };
 
+  const handleRunFraudCheck = async (algorithmId: string) => {
+    if (!uploadedFileName || !mapping) {
+      alert('먼저 원장 CSV를 업로드하고 컬럼 매핑을 완료해 주세요.');
+      return;
+    }
+    setFraudCheckRunning(true, algorithmId);
+    setDynamicChart(null);
+    try {
+      const res = await fetch(apiUrl('/api/fraud-check'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_name: uploadedFileName, mapping, algorithm: algorithmId }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.detail || '부정징후 검사 실패');
+
+      const flagged: JournalEntry[] = JSON.parse(result.data);
+      setFraudResult(
+        {
+          algorithm: result.algorithm,
+          algorithm_name: result.algorithm_name,
+          explanation: result.explanation,
+          flagged_count: result.flagged_count,
+          total_count: result.total_count,
+          stats: result.stats,
+        },
+        flagged.map((f) => String(f.std_doc_num))
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '알 수 없는 오류';
+      alert(`부정징후 검사 실패: ${message}`);
+      setFraudCheckRunning(false, null);
+    }
+  };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || !uploadedFileName) return;
+    if (!input.trim() || !uploadedFileName || !mapping) return;
 
     const userMsg = input;
-    // 💡 백엔드에 보낼 전체 대화 기록 복사
     const chatHistory = messages.map(m => ({ role: m.role, content: m.content }));
     chatHistory.push({ role: 'user', content: userMsg });
 
@@ -71,14 +121,14 @@ export default function AuditDashboard() {
     setIsAiThinking(true);
 
     try {
-      const res = await fetch('http://localhost:8000/api/chat', {
+      const res = await fetch(apiUrl('/api/chat'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           file_name: uploadedFileName,
           message: userMsg,
-          history: chatHistory, // 전체 문맥 전송!
-          mapping: mapping      // 정확한 매핑 정보 전송!
+          history: chatHistory,
+          mapping: mapping
         })
       });
 
@@ -87,34 +137,33 @@ export default function AuditDashboard() {
 
       if (result.success) {
         setMessages(prev => [...prev, { role: 'assistant', content: result.explanation }]);
-        
+
         const parsedData = JSON.parse(result.data);
         setGlobalData(parsedData);
+        clearFraudResult();
 
         if (result.requires_chart && parsedData.length > 0) {
           const xKey = result.chart_x;
           const yKey = result.chart_y;
-          
+
           const summary: Record<string, number> = {};
-          parsedData.forEach((row: any) => {
-            let xVal = row[xKey] || '기타';
-            
-            // 💡 날짜(std_date) 기반 차트일 경우, 알아서 'YYYY-MM' 월별 단위로 묶어줍니다!
+          parsedData.forEach((row: Record<string, unknown>) => {
+            let xVal = String(row[xKey] ?? '기타');
+
             if (xKey === 'std_date' && xVal !== '기타') {
               const d = new Date(Number(xVal) || xVal);
               if (!isNaN(d.getTime())) {
-                xVal = d.toISOString().substring(0, 7); // 예: "2025-01"
+                xVal = d.toISOString().substring(0, 7);
               }
             }
             summary[xVal] = (summary[xVal] || 0) + (Number(row[yKey]) || 0);
           });
 
-          // 날짜나 이름순 정렬 후 상위 8개 차트화
           const chartRows = Object.entries(summary)
             .map(([x, y]) => ({ x, y }))
-            .sort((a, b) => a.x.localeCompare(b.x)) 
+            .sort((a, b) => a.x.localeCompare(b.x))
             .slice(0, 8);
-            
+
           setDynamicChart({
             type: result.chart_type,
             title: `AI 추출 시각화 [X축: ${xKey.replace('std_', '')} / Y축: ${yKey.replace('std_', '')}]`,
@@ -126,68 +175,46 @@ export default function AuditDashboard() {
       } else {
         setMessages(prev => [...prev, { role: 'assistant', content: result.explanation }]);
       }
-    } catch (err) {
+    } catch {
       setIsAiThinking(false);
       setMessages(prev => [...prev, { role: 'assistant', content: '백엔드 AI 서버 통신에 실패했습니다.' }]);
     }
   };
 
-  const maxChartVal = dynamicChart ? Math.max(...dynamicChart.data.map(d => d.y), 1) : 1;
-
   return (
     <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
-      
-      <div className="flex flex-col flex-1 h-full p-4 gap-4 overflow-hidden">
+
+      <FraudSidebar onRunAlgorithm={handleRunFraudCheck} disabled={!uploadedFileName || !mapping} />
+
+      <div className="flex flex-col flex-1 h-full p-4 gap-4 overflow-hidden min-w-0">
         <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-4 rounded-xl">
           <div className="flex items-center gap-3">
             <FileSpreadsheet className="text-emerald-400 w-6 h-6" />
             <div>
-              <h1 className="font-bold text-md">매출 감사 AI Agent</h1>
+              <h1 className="font-bold text-md">전수조사 AI 감사 Agent</h1>
               <p className="text-xs text-slate-400">
-                {uploadedFileName ? `활성 원장: ${uploadedFileName} ${mapping ? '(매핑 완료)' : '(매핑 대기중)'}` : '감사할 매출 원장 CSV 파일을 업로드해 주세요.'}
+                {uploadedFileName ? `활성 원장: ${uploadedFileName} ${mapping ? '(매핑 완료)' : '(매핑 대기중)'}` : '감사할 원장 CSV 파일을 업로드해 주세요.'}
               </p>
             </div>
           </div>
-          
+
           <label className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer transition ${
             isUploading ? 'bg-slate-800 text-slate-500' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
           }`}>
             <Upload className="w-4 h-4" />
-            {isUploading ? '분석 중...' : '매출 원장 업로드 (.csv)'}
+            {isUploading ? '분석 중...' : '원장 업로드 (.csv)'}
             <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" disabled={isUploading} />
           </label>
         </div>
 
-        <div className="h-1/3 bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col">
+        <div className="h-[280px] bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col">
           <div className="flex items-center gap-2 mb-2 text-emerald-400">
             <BarChart3 className="w-5 h-5" />
-            <h2 className="font-bold">AI 분석적 절차 대쉬보드</h2>
+            <h2 className="font-bold">데이터 시각화 분석</h2>
           </div>
-          
-          <div className="flex-1 w-full bg-slate-950 border border-slate-800 rounded-lg p-3 overflow-hidden flex flex-col justify-center">
-            {dynamicChart ? (
-              <div className="h-full flex flex-col justify-between">
-                <div className="text-xs font-bold text-slate-300 border-b border-slate-800 pb-1 mb-1">{dynamicChart.title}</div>
-                <div className="flex-1 flex items-end gap-6 pt-4 pb-2 px-4 justify-around">
-                  {dynamicChart.data.map((d, i) => (
-                    <div key={i} className="flex flex-col items-center flex-1 max-w-[60px] h-full justify-end gap-1">
-                      <div className="text-[10px] text-emerald-400 font-mono font-semibold truncate w-full text-center">
-                        ₩{d.y >= 10000 ? `${(d.y / 10000).toFixed(0)}만` : d.y.toLocaleString()}
-                      </div>
-                      <div 
-                        className="w-full bg-gradient-to-t from-emerald-600 to-teal-400 rounded-t-md transition-all duration-500"
-                        style={{ height: `${Math.max((d.y / maxChartVal) * 75, 8)}%` }}
-                      />
-                      <div className="text-[10px] text-slate-400 truncate w-full text-center mt-1" title={d.x}>{d.x}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="text-center text-slate-500 text-sm">
-                 오른쪽 감사 Agent에게 의심스러운 거래 분석이나 차트 생성을 명령해 보세요!
-              </div>
-            )}
+
+          <div className="flex-1 w-full bg-slate-950 border border-slate-800 rounded-lg p-3 overflow-hidden">
+            <Visualization data={globalData} dynamicChart={dynamicChart} />
           </div>
         </div>
 
@@ -195,10 +222,10 @@ export default function AuditDashboard() {
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2 text-blue-400">
               <TableProperties className="w-5 h-5" />
-              <h2 className="font-bold">매출 원장 상세 그리드</h2>
+              <h2 className="font-bold">원장 상세 그리드</h2>
             </div>
-            
-            <button 
+
+            <button
               onClick={handleResetFilters}
               className="flex items-center gap-1 text-xs bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-700 transition font-medium text-slate-300"
             >
@@ -212,17 +239,17 @@ export default function AuditDashboard() {
         </div>
       </div>
 
-      <div className="w-[420px] h-full bg-slate-900 border-l border-slate-800 flex flex-col overflow-hidden">
+      <div className="w-[380px] h-full bg-slate-900 border-l border-slate-800 flex flex-col overflow-hidden">
         <div className="p-4 border-b border-slate-800 flex items-center gap-2 bg-slate-900/50">
           <Bot className="text-indigo-400 w-5 h-5" />
-          <h2 className="font-bold">부정 징후 탐지 Agent</h2>
+          <h2 className="font-bold">AI 원장 질의 Agent</h2>
         </div>
-        
+
         <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3 bg-slate-950/40">
           {messages.map((msg, idx) => (
             <div key={idx} className={`flex flex-col max-w-[85%] rounded-xl p-3 text-sm ${
-              msg.role === 'user' 
-                ? 'bg-indigo-600 text-white self-end rounded-tr-none shadow-md' 
+              msg.role === 'user'
+                ? 'bg-indigo-600 text-white self-end rounded-tr-none shadow-md'
                 : 'bg-slate-800 text-slate-200 self-start rounded-tl-none border border-slate-700 shadow-md'
             }`}>
               <span className="text-[10px] opacity-60 mb-1 font-bold">{msg.role === 'user' ? '회계사' : '감사 AI Agent'}</span>
@@ -245,8 +272,8 @@ export default function AuditDashboard() {
             disabled={!uploadedFileName || isAiThinking}
             className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
           />
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={!uploadedFileName || isAiThinking}
             className="bg-indigo-600 hover:bg-indigo-500 text-white p-2.5 rounded-xl transition disabled:opacity-50"
           >
@@ -255,7 +282,7 @@ export default function AuditDashboard() {
         </form>
       </div>
 
-      <MappingModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+      <MappingModal key={uploadedFileName ?? 'no-file'} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
     </div>
   );
 }
