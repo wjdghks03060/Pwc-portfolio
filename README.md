@@ -1,3 +1,6 @@
+# 동영상 데모
+https://www.youtube.com/watch?v=h6pufhmljZs
+
 # 전수조사 AI 감사 Agent (kpmg-portfolio)
 
 원장(CSV)을 업로드하면 표준화된 형태로 매핑하고, 데이터 시각화 분석과 다양한 **부정징후(Fraud Indicator) 탐지 알고리즘**을 실행해 문제 있는 분개를 즉시 추출해주는 AI 감사 보조 도구입니다.
