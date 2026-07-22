@@ -60,8 +60,8 @@ export default function MappingModal({ isOpen, onClose }: MappingModalProps) {
 
       const parsedData = JSON.parse(result.data);
       
-      // Zustand 스토어에 데이터 반영 (여기서 데이터가 채워짐!)
-      useAuditStore.getState().setGlobalData(parsedData);
+      // 원본 원장으로 보관 — AI 질의로 globalData가 줄어들어도 복구 가능
+      useAuditStore.getState().setBaseData(parsedData);
       
       onClose();
     } catch (e) {

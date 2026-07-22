@@ -39,6 +39,8 @@ export interface FraudCheckResult {
 }
 
 interface AuditState {
+  /** 매핑 직후 원본 원장. AI 질의로 globalData가 줄어들어도 복구 기준으로 유지 */
+  baseData: JournalEntry[];
   globalData: JournalEntry[];
   filteredData: JournalEntry[];
   selectedVendor: string | null;
@@ -54,6 +56,10 @@ interface AuditState {
   isFraudCheckRunning: boolean;
 
   setGlobalData: (data: JournalEntry[]) => void;
+  /** 매핑 완료 시 원본 원장을 저장하고 그리드에도 동일하게 로드 */
+  setBaseData: (data: JournalEntry[]) => void;
+  /** AI 질의/필터로 줄어든 globalData를 원본 원장으로 복구 */
+  restoreBaseData: () => void;
   setVendorFilter: (vendor: string | null) => void;
   setUploadInfo: (fileName: string, columns: string[]) => void;
   setMapping: (mapping: ColumnMapping) => void;
@@ -81,6 +87,7 @@ function computeFiltered(state: {
 }
 
 export const useAuditStore = create<AuditState>((set) => ({
+  baseData: [],
   globalData: [],
   filteredData: [],
   selectedVendor: null,
@@ -98,6 +105,41 @@ export const useAuditStore = create<AuditState>((set) => ({
     set((state) => ({
       globalData: data,
       filteredData: computeFiltered({ ...state, globalData: data }),
+    })),
+
+  setBaseData: (data) =>
+    set((state) => ({
+      baseData: data,
+      globalData: data,
+      selectedVendor: null,
+      fraudResult: null,
+      flaggedDocNums: null,
+      activeAlgorithmId: null,
+      showFlaggedOnly: false,
+      filteredData: computeFiltered({
+        ...state,
+        globalData: data,
+        selectedVendor: null,
+        flaggedDocNums: null,
+        showFlaggedOnly: false,
+      }),
+    })),
+
+  restoreBaseData: () =>
+    set((state) => ({
+      globalData: state.baseData,
+      selectedVendor: null,
+      fraudResult: null,
+      flaggedDocNums: null,
+      activeAlgorithmId: null,
+      showFlaggedOnly: false,
+      filteredData: computeFiltered({
+        ...state,
+        globalData: state.baseData,
+        selectedVendor: null,
+        flaggedDocNums: null,
+        showFlaggedOnly: false,
+      }),
     })),
 
   setVendorFilter: (vendor) =>
