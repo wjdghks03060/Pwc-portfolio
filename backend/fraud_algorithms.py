@@ -217,21 +217,104 @@ def related_party_keyword_test(df: pd.DataFrame) -> FraudResult:
 # ---------------------------------------------------------------------------
 # 6. 중복 지급 의심 탐지
 # ---------------------------------------------------------------------------
+# 동일 전표의 차·대변 쌍은 중복이 아니다. 서로 다른 전표에서
+# 같은 거래처·같은 금액이 근접 일자(기본 14일) 안에 반복될 때만 의심한다.
+DUPLICATE_PAYMENT_DAY_WINDOW = 14
+
+
 def duplicate_transaction_test(df: pd.DataFrame) -> FraudResult:
     work = df.copy()
     work["_amt"] = _amount(df).abs()
-    work = work[work["_amt"] > 0]
+    work["_date"] = _dates(df)
+    work["std_doc_num"] = work["std_doc_num"].astype(str)
+    work["std_vendor"] = work["std_vendor"].astype(str).str.strip()
+    work = work[
+        (work["_amt"] > 0)
+        & work["std_vendor"].notna()
+        & (work["std_vendor"] != "")
+        & (work["std_vendor"].str.lower() != "nan")
+    ].copy()
 
-    dup_mask = work.duplicated(subset=["std_vendor", "_amt"], keep=False)
-    flagged = work[dup_mask].sort_values(["std_vendor", "_amt"], ascending=[True, False]).drop(columns="_amt")
+    if work.empty:
+        explanation = (
+            "중복 지급 의심 분개를 탐지하지 못했습니다. "
+            f"(기준: 서로 다른 전표 + 동일 거래처·금액 + {DUPLICATE_PAYMENT_DAY_WINDOW}일 이내)"
+        )
+        return FraudResult(True, explanation, _empty(df), {"flagged_count": 0, "group_count": 0})
 
-    group_count = work[dup_mask].groupby(["std_vendor", "_amt"]).ngroups if dup_mask.any() else 0
-    explanation = (
-        f"동일 거래처에 동일 금액이 2회 이상 반복 청구된 의심 분개 {len(flagged):,}건"
-        f"({group_count:,}개 그룹)을 탐지했습니다. 동일 거래처·동일 금액의 반복 지급은 "
-        "중복 결제, 허위 세금계산서를 통한 대금 재청구 등의 신호일 수 있습니다."
+    # 전표×거래처×금액 = 경제적 거래 1건 (복식 차·대변 쌍을 1건으로 축약)
+    events = (
+        work.groupby(["std_doc_num", "std_vendor", "_amt"], as_index=False)
+        .agg(_date=("_date", "min"))
     )
-    return FraudResult(True, explanation, flagged, {"flagged_count": len(flagged), "group_count": group_count})
+    events = events[
+        events.groupby(["std_vendor", "_amt"])["std_doc_num"].transform("nunique") >= 2
+    ].copy()
+
+    if events.empty:
+        explanation = (
+            "중복 지급 의심 분개를 탐지하지 못했습니다. "
+            f"(기준: 서로 다른 전표 + 동일 거래처·금액 + {DUPLICATE_PAYMENT_DAY_WINDOW}일 이내)"
+        )
+        return FraudResult(True, explanation, _empty(df), {"flagged_count": 0, "group_count": 0})
+
+    hit_keys: list[tuple[str, str, float]] = []
+    for _, group in events.groupby(["std_vendor", "_amt"], sort=False):
+        rows = group.reset_index(drop=True)
+        n = len(rows)
+        hit = [False] * n
+        for i in range(n):
+            for j in range(i + 1, n):
+                di = rows.at[i, "_date"]
+                dj = rows.at[j, "_date"]
+                if pd.isna(di) or pd.isna(dj):
+                    # 날짜가 없으면 전표만 다른 동일 거래처·금액으로 의심
+                    close = True
+                else:
+                    close = abs((di - dj).days) <= DUPLICATE_PAYMENT_DAY_WINDOW
+                if close:
+                    hit[i] = True
+                    hit[j] = True
+        for k, is_hit in enumerate(hit):
+            if is_hit:
+                hit_keys.append(
+                    (
+                        str(rows.at[k, "std_doc_num"]),
+                        str(rows.at[k, "std_vendor"]),
+                        float(rows.at[k, "_amt"]),
+                    )
+                )
+
+    if not hit_keys:
+        explanation = (
+            "중복 지급 의심 분개를 탐지하지 못했습니다. "
+            f"(기준: 서로 다른 전표 + 동일 거래처·금액 + {DUPLICATE_PAYMENT_DAY_WINDOW}일 이내)"
+        )
+        return FraudResult(True, explanation, _empty(df), {"flagged_count": 0, "group_count": 0})
+
+    key_df = pd.DataFrame(hit_keys, columns=["std_doc_num", "std_vendor", "_amt"]).drop_duplicates()
+    flagged = (
+        work.merge(key_df, on=["std_doc_num", "std_vendor", "_amt"], how="inner")
+        .sort_values(["std_vendor", "_amt", "std_doc_num"], ascending=[True, False, True])
+        .drop(columns=["_amt", "_date"])
+    )
+    group_count = key_df.groupby(["std_vendor", "_amt"]).ngroups
+    explanation = (
+        f"서로 다른 전표에서 동일 거래처·동일 금액이 {DUPLICATE_PAYMENT_DAY_WINDOW}일 이내에 "
+        f"반복된 의심 분개 {len(flagged):,}건({group_count:,}개 그룹)을 탐지했습니다. "
+        "같은 전표의 차·대변 쌍은 제외했으며, 근접 일자의 반복 지급은 "
+        "중복 결제나 허위 세금계산서 재청구 신호일 수 있습니다."
+    )
+    return FraudResult(
+        True,
+        explanation,
+        flagged,
+        {
+            "flagged_count": len(flagged),
+            "group_count": int(group_count),
+            "day_window": DUPLICATE_PAYMENT_DAY_WINDOW,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +525,7 @@ ALGORITHMS: list[AlgorithmSpec] = [
         id="duplicate_transaction",
         name="중복 지급 의심 탐지",
         category="전표 무결성",
-        description="동일 거래처·동일 금액이 반복 청구된 거래를 탐지합니다.",
+        description="서로 다른 전표에서 동일 거래처·동일 금액이 14일 이내에 반복된 거래를 탐지합니다. 같은 전표의 차·대변 쌍은 제외합니다.",
         risk_level="중",
         fn=duplicate_transaction_test,
     ),
