@@ -252,13 +252,20 @@ def _llm_generate_sql(message: str, history: list[ChatMessage]) -> Optional[dict
     client = OpenAI(api_key=api_key)
     system_prompt = (
         "You are an accounting audit assistant. The user's ledger is available as a DuckDB "
-        "table named std_ledger with columns: std_doc_num, std_date (text date), "
+        "table named std_ledger with columns: std_doc_num, std_date (TEXT 'YYYY-MM-DD'), "
         "std_account_code, std_vendor, std_debit_amt (double), std_credit_amt (double), "
-        "std_desc (text). Given the user's Korean request, respond ONLY with strict JSON "
-        '(no markdown) with keys: "sql" (a single SELECT statement against std_ledger), '
-        '"explanation" (Korean, 1-2 sentences), "requires_chart" (bool), '
-        '"chart_x" (one of the std_ columns or null), "chart_y" (one of std_debit_amt/'
-        'std_credit_amt or null), "chart_type" ("bar" or null).'
+        "std_desc (text).\n"
+        "Rules for SQL:\n"
+        "- Return a single SELECT against std_ledger only.\n"
+        "- std_date is TEXT, NOT a DATE type. For a month like June 2023 use "
+        "std_date >= '2023-06-01' AND std_date < '2023-07-01' (or LIKE '2023-06%'). "
+        "Do NOT use month()/year()/strftime on std_date unless you CAST it first.\n"
+        "- For Korean vendor names, prefer std_vendor LIKE '%카카오%' over exact equality.\n"
+        "- Keep all std_* columns in the SELECT list when returning journal rows.\n"
+        "Respond ONLY with strict JSON (no markdown) with keys: "
+        '"sql", "explanation" (Korean, 1-2 sentences, do not invent row counts), '
+        '"requires_chart" (bool), "chart_x" (std_ column or null), '
+        '"chart_y" (std_debit_amt/std_credit_amt or null), "chart_type" ("bar" or null).'
     )
     messages = [{"role": "system", "content": system_prompt}]
     for h in history[-6:]:
@@ -278,25 +285,85 @@ def _llm_generate_sql(message: str, history: list[ChatMessage]) -> Optional[dict
         return None
 
 
+def _parse_year_month(message: str) -> tuple[Optional[str], Optional[str]]:
+    """한국어 질의에서 연/월을 추출. 예: 2023년 6월 -> ('2023', '06')"""
+    year = None
+    month = None
+    ym = re.search(r"(20\d{2})\s*년\s*(\d{1,2})\s*월", message)
+    if ym:
+        year, month = ym.group(1), f"{int(ym.group(2)):02d}"
+        return year, month
+    y_only = re.search(r"(20\d{2})\s*년", message)
+    if y_only:
+        year = y_only.group(1)
+    m_only = re.search(r"(?<!\d)(\d{1,2})\s*월", message)
+    if m_only:
+        month = f"{int(m_only.group(1)):02d}"
+    return year, month
+
+
 def _fallback_keyword_search(message: str, std_df: pd.DataFrame) -> dict:
-    stopwords = {"해줘", "뽑아줘", "보여줘", "그려줘", "다시", "이걸", "관련", "내역", "거래처를", "거래처의", "차트로"}
+    stopwords = {
+        "해줘", "뽑아줘", "보여줘", "그려줘", "다시", "이걸", "관련", "내역",
+        "거래처를", "거래처의", "차트로", "추출해줘", "거래만", "분개", "원장",
+    }
     tokens = [t for t in re.split(r"\s+", message.strip()) if len(t) >= 2 and t not in stopwords]
+    # '2023년', '6월' 같은 토큰은 날짜 필터로 처리하므로 텍스트 검색에서 제외
+    text_tokens = [
+        t for t in tokens
+        if not re.fullmatch(r"20\d{2}년?", t)
+        and not re.fullmatch(r"\d{1,2}월", t)
+    ]
 
-    if not tokens:
-        return {"matched": std_df.iloc[0:0], "explanation": "질의에서 검색 키워드를 찾지 못했습니다. (LLM 미설정: 단순 키워드 검색 모드)"}
+    mask = pd.Series(True, index=std_df.index)
+    year, month = _parse_year_month(message)
+    dates = std_df["std_date"].astype(str)
+    if year and month:
+        mask &= dates.str.startswith(f"{year}-{month}")
+    elif year:
+        mask &= dates.str.startswith(year)
+    elif month:
+        mask &= dates.str.contains(rf"-{month}-", regex=True, na=False)
 
-    pattern = "|".join(re.escape(t) for t in tokens)
-    mask = (
-        std_df["std_desc"].astype(str).str.contains(pattern, regex=True, na=False)
-        | std_df["std_vendor"].astype(str).str.contains(pattern, regex=True, na=False)
-        | std_df["std_account_code"].astype(str).str.contains(pattern, regex=True, na=False)
-    )
+    if text_tokens:
+        pattern = "|".join(re.escape(t) for t in text_tokens)
+        text_mask = (
+            std_df["std_desc"].astype(str).str.contains(pattern, regex=True, na=False)
+            | std_df["std_vendor"].astype(str).str.contains(pattern, regex=True, na=False)
+            | std_df["std_account_code"].astype(str).str.contains(pattern, regex=True, na=False)
+        )
+        mask &= text_mask
+    elif not (year or month):
+        return {
+            "matched": std_df.iloc[0:0],
+            "explanation": "질의에서 검색 키워드를 찾지 못했습니다. (단순 키워드 검색 모드)",
+        }
+
     matched = std_df[mask]
-    explanation = (
-        f"(LLM API 키가 설정되지 않아 단순 키워드 검색으로 대체되었습니다) "
-        f"'{', '.join(tokens)}' 관련 {len(matched):,}건을 찾았습니다."
-    )
+    bits = []
+    if year and month:
+        bits.append(f"{year}년 {int(month)}월")
+    elif year:
+        bits.append(f"{year}년")
+    elif month:
+        bits.append(f"{int(month)}월")
+    if text_tokens:
+        bits.append(", ".join(text_tokens))
+    explanation = f"'{ ' / '.join(bits) }' 조건으로 {len(matched):,}건을 찾았습니다."
     return {"matched": matched, "explanation": explanation}
+
+
+def _ensure_std_columns(result_df: pd.DataFrame, std_df: pd.DataFrame) -> pd.DataFrame:
+    """집계 결과가 아닌 행 조회인데 std_ 컬럼이 빠지면 원본 스키마로 맞춘다."""
+    if result_df.empty:
+        return result_df
+    missing = [c for c in _STD_COLUMNS if c not in result_df.columns]
+    if not missing:
+        return result_df
+    # 집계/차트용 결과(그룹 컬럼만 있는 경우)는 그대로 둔다
+    if not any(c in result_df.columns for c in _STD_COLUMNS):
+        return result_df
+    return result_df
 
 
 @app.post("/api/chat")
@@ -312,18 +379,49 @@ def chat(req: ChatRequest):
             con.register("std_ledger", std_df)
             result_df = con.execute(llm_result["sql"]).fetchdf()
         except Exception as exc:  # noqa: BLE001
-            return {"success": False, "explanation": f"SQL 실행에 실패했습니다: {exc}"}
+            # SQL 실패 시 키워드 폴백으로 재시도
+            fallback = _fallback_keyword_search(req.message, std_df)
+            return {
+                "success": True,
+                "explanation": (
+                    f"SQL 실행에 실패해 키워드 검색으로 대체했습니다. ({exc}) "
+                    + fallback["explanation"]
+                ),
+                "data": _to_json_records(fallback["matched"]),
+                "requires_chart": False,
+                "empty": fallback["matched"].empty,
+            }
         finally:
             con.close()
 
+        result_df = _ensure_std_columns(result_df, std_df)
+
+        # LLM SQL이 0건이면 날짜/거래처 폴백 검색으로 한 번 더 시도
+        if result_df.empty:
+            fallback = _fallback_keyword_search(req.message, std_df)
+            if not fallback["matched"].empty:
+                return {
+                    "success": True,
+                    "explanation": (
+                        "생성 SQL 결과가 0건이라 키워드/기간 검색으로 재조회했습니다. "
+                        + fallback["explanation"]
+                    ),
+                    "data": _to_json_records(fallback["matched"]),
+                    "requires_chart": False,
+                    "empty": False,
+                }
+
+        base_explanation = llm_result.get("explanation") or "요청하신 데이터를 조회했습니다."
+        explanation = f"{base_explanation} (조회 결과 {len(result_df):,}건)"
         return {
             "success": True,
-            "explanation": llm_result.get("explanation", "요청하신 데이터를 조회했습니다."),
+            "explanation": explanation,
             "data": _to_json_records(result_df),
             "requires_chart": bool(llm_result.get("requires_chart")),
             "chart_x": llm_result.get("chart_x"),
             "chart_y": llm_result.get("chart_y"),
             "chart_type": llm_result.get("chart_type"),
+            "empty": result_df.empty,
         }
 
     fallback = _fallback_keyword_search(req.message, std_df)
@@ -332,6 +430,7 @@ def chat(req: ChatRequest):
         "explanation": fallback["explanation"],
         "data": _to_json_records(fallback["matched"]),
         "requires_chart": False,
+        "empty": fallback["matched"].empty,
     }
 
 

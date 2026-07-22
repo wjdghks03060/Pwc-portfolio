@@ -155,41 +155,56 @@ export default function AuditDashboard() {
       setIsAiThinking(false);
 
       if (result.success) {
-        setMessages(prev => [...prev, { role: 'assistant', content: result.explanation }]);
+        const parsedData: JournalEntry[] = JSON.parse(result.data || '[]');
+        const isEmpty = Boolean(result.empty) || parsedData.length === 0;
 
-        const parsedData = JSON.parse(result.data);
-        setGlobalData(parsedData);
-        clearFraudResult();
-
-        if (result.requires_chart && parsedData.length > 0) {
-          const xKey = result.chart_x;
-          const yKey = result.chart_y;
-
-          const summary: Record<string, number> = {};
-          parsedData.forEach((row: Record<string, unknown>) => {
-            let xVal = String(row[xKey] ?? '기타');
-
-            if (xKey === 'std_date' && xVal !== '기타') {
-              const d = new Date(Number(xVal) || xVal);
-              if (!isNaN(d.getTime())) {
-                xVal = d.toISOString().substring(0, 7);
-              }
-            }
-            summary[xVal] = (summary[xVal] || 0) + (Number(row[yKey]) || 0);
-          });
-
-          const chartRows = Object.entries(summary)
-            .map(([x, y]) => ({ x, y }))
-            .sort((a, b) => a.x.localeCompare(b.x))
-            .slice(0, 8);
-
-          setDynamicChart({
-            type: result.chart_type,
-            title: `AI 추출 시각화 [X축: ${xKey.replace('std_', '')} / Y축: ${yKey.replace('std_', '')}]`,
-            data: chartRows
-          });
-        } else {
+        if (isEmpty) {
+          // 0건이면 원장을 비우지 않고 안내만 표시 (기존 그리드 유지)
+          setMessages(prev => [
+            ...prev,
+            {
+              role: 'assistant',
+              content:
+                (result.explanation || '조회 결과가 없습니다.') +
+                '\n\n※ 결과가 0건이라 원장 그리드는 그대로 유지했습니다. 조건을 바꿔 다시 질문해 주세요.',
+            },
+          ]);
           setDynamicChart(null);
+        } else {
+          setMessages(prev => [...prev, { role: 'assistant', content: result.explanation }]);
+          setGlobalData(parsedData);
+          clearFraudResult();
+
+          if (result.requires_chart && parsedData.length > 0) {
+            const xKey = result.chart_x;
+            const yKey = result.chart_y;
+
+            const summary: Record<string, number> = {};
+            parsedData.forEach((row: Record<string, unknown>) => {
+              let xVal = String(row[xKey] ?? '기타');
+
+              if (xKey === 'std_date' && xVal !== '기타') {
+                const d = new Date(Number(xVal) || xVal);
+                if (!isNaN(d.getTime())) {
+                  xVal = d.toISOString().substring(0, 7);
+                }
+              }
+              summary[xVal] = (summary[xVal] || 0) + (Number(row[yKey]) || 0);
+            });
+
+            const chartRows = Object.entries(summary)
+              .map(([x, y]) => ({ x, y }))
+              .sort((a, b) => a.x.localeCompare(b.x))
+              .slice(0, 8);
+
+            setDynamicChart({
+              type: result.chart_type,
+              title: `AI 추출 시각화 [X축: ${xKey.replace('std_', '')} / Y축: ${yKey.replace('std_', '')}]`,
+              data: chartRows
+            });
+          } else {
+            setDynamicChart(null);
+          }
         }
       } else {
         setMessages(prev => [...prev, { role: 'assistant', content: result.explanation }]);
