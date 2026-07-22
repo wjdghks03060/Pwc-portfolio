@@ -38,7 +38,7 @@ cp .env.example .env.local   # 필요 시 NEXT_PUBLIC_API_URL 수정
 npm run dev
 ```
 
-브라우저에서 `http://localhost:3000` 접속 후, 원장 CSV 업로드 → 컬럼 매핑 → 좌측 사이드바에서 부정징후 알고리즘 클릭 순으로 사용합니다. (샘플 원장: `backend/temp_files/fdd_sample_general_ledger_300.csv`)
+브라우저에서 `http://localhost:3000` 접속 후, 원장 CSV 업로드 → 컬럼 매핑 → 좌측 사이드바에서 부정징후 알고리즘 클릭 순으로 사용합니다. 
 
 ## 웹 배포 (추천: Vercel + Render)
 
@@ -58,7 +58,6 @@ npm run dev
    - `OPENAI_MODEL` = `gpt-4o-mini` (선택)
 5. 배포 후 Health: `https://<backend>.onrender.com/api/health`
 
-> Free 플랜은 디스크가 비영속이라 서버 sleep/재시작 시 업로드 CSV가 사라질 수 있습니다. 데모·포트폴리오 용도로는 충분합니다.
 
 ### 2) 프론트 — Vercel
 
