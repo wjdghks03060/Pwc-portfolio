@@ -10,14 +10,18 @@ import FraudSidebar from './components/FraudSidebar';
 import Visualization, { DynamicChart } from './components/Visualization';
 import { apiUrl } from './lib/api';
 
+const AI_WELCOME_MESSAGE =
+  '안녕하세요, 회계사님! \n원장을 분석할 준비가 되었습니다.\n\n💡 추천 명령:\n1. "전기일자 6월 삼성전자 거래처를 추출해줘"\n2. "이걸 다시 월별 추이액 차트로 그려줘"';
+
 export default function AuditDashboard() {
   const {
     uploadedFileName,
     setUploadInfo,
     mapping,
-    setVendorFilter,
     setGlobalData,
     globalData,
+    baseData,
+    restoreBaseData,
     setFraudCheckRunning,
     setFraudResult,
     clearFraudResult,
@@ -26,7 +30,7 @@ export default function AuditDashboard() {
   const [isUploading, setIsUploading] = useState(false);
 
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
-    { role: 'assistant', content: '안녕하세요, 회계사님! \n원장을 분석할 준비가 되었습니다.\n\n💡 추천 명령:\n1. "전기일자 6월 삼성전자 거래처를 추출해줘"\n2. "이걸 다시 월별 추이액 차트로 그려줘"' }
+    { role: 'assistant', content: AI_WELCOME_MESSAGE }
   ]);
   const [input, setInput] = useState('');
   const [isAiThinking, setIsAiThinking] = useState(false);
@@ -34,6 +38,12 @@ export default function AuditDashboard() {
   const [dynamicChart, setDynamicChart] = useState<DynamicChart | null>(null);
 
   const gridRef = useRef<AgGridReact<JournalEntry>>(null);
+
+  const clearGridColumnFilters = () => {
+    if (gridRef.current && gridRef.current.api) {
+      gridRef.current.api.setFilterModel(null);
+    }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -53,6 +63,7 @@ export default function AuditDashboard() {
 
       clearFraudResult();
       setDynamicChart(null);
+      setMessages([{ role: 'assistant', content: AI_WELCOME_MESSAGE }]);
       setUploadInfo(data.file_name, data.columns);
       setIsModalOpen(true);
     } catch (error) {
@@ -65,11 +76,16 @@ export default function AuditDashboard() {
   };
 
   const handleResetFilters = () => {
-    setVendorFilter(null);
-    clearFraudResult();
-    if (gridRef.current && gridRef.current.api) {
-      gridRef.current.api.setFilterModel(null);
-    }
+    restoreBaseData();
+    clearGridColumnFilters();
+    setDynamicChart(null);
+  };
+
+  const handleResetAiChat = () => {
+    setMessages([{ role: 'assistant', content: AI_WELCOME_MESSAGE }]);
+    setInput('');
+    restoreBaseData();
+    clearGridColumnFilters();
     setDynamicChart(null);
   };
 
@@ -78,6 +94,9 @@ export default function AuditDashboard() {
       alert('먼저 원장 CSV를 업로드하고 컬럼 매핑을 완료해 주세요.');
       return;
     }
+    // AI 질의로 줄어든 그리드를 원본으로 되돌린 뒤 부정징후 하이라이트를 적용
+    restoreBaseData();
+    clearGridColumnFilters();
     setFraudCheckRunning(true, algorithmId);
     setDynamicChart(null);
     try {
@@ -181,6 +200,8 @@ export default function AuditDashboard() {
     }
   };
 
+  const canResetLedger = baseData.length > 0;
+
   return (
     <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
 
@@ -227,7 +248,8 @@ export default function AuditDashboard() {
 
             <button
               onClick={handleResetFilters}
-              className="flex items-center gap-1 text-xs bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-700 transition font-medium text-slate-300"
+              disabled={!canResetLedger}
+              className="flex items-center gap-1 text-xs bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-700 transition font-medium text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
               전체 필터 초기화
@@ -240,9 +262,21 @@ export default function AuditDashboard() {
       </div>
 
       <div className="w-[380px] h-full bg-slate-900 border-l border-slate-800 flex flex-col overflow-hidden">
-        <div className="p-4 border-b border-slate-800 flex items-center gap-2 bg-slate-900/50">
-          <Bot className="text-indigo-400 w-5 h-5" />
-          <h2 className="font-bold">AI 원장 질의 Agent</h2>
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between gap-2 bg-slate-900/50">
+          <div className="flex items-center gap-2 min-w-0">
+            <Bot className="text-indigo-400 w-5 h-5 shrink-0" />
+            <h2 className="font-bold truncate">AI 원장 질의 Agent</h2>
+          </div>
+          <button
+            type="button"
+            onClick={handleResetAiChat}
+            disabled={!canResetLedger && messages.length <= 1}
+            title="대화와 원장 필터를 초기화합니다"
+            className="flex items-center gap-1 text-[11px] bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg hover:bg-slate-700 transition font-medium text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          >
+            <RotateCcw className="w-3 h-3 text-slate-400" />
+            초기화
+          </button>
         </div>
 
         <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3 bg-slate-950/40">
