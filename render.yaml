@@ -15,3 +15,6 @@ services:
         sync: false
       - key: OPENAI_MODEL
         value: gpt-4o-mini
+
+  # Docker로 직접 만들 경우: Dockerfile Path = ./Dockerfile (저장소 루트)
+  # 또는 Dockerfile Path = backend/Dockerfile , Docker Context = backend
