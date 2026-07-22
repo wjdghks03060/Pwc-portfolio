@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { ShieldAlert, ChevronDown, RefreshCcw, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { ShieldAlert, ChevronDown, RefreshCcw, Eye, EyeOff, Loader2, Download } from 'lucide-react';
 import { apiUrl } from '../lib/api';
 import { useAuditStore, FraudAlgorithm } from '../store';
 
@@ -13,10 +13,11 @@ const RISK_STYLES: Record<string, string> = {
 
 interface FraudSidebarProps {
   onRunAlgorithm: (algorithmId: string) => void;
+  onExportFlagged: () => void;
   disabled: boolean;
 }
 
-export default function FraudSidebar({ onRunAlgorithm, disabled }: FraudSidebarProps) {
+export default function FraudSidebar({ onRunAlgorithm, onExportFlagged, disabled }: FraudSidebarProps) {
   const [algorithms, setAlgorithms] = useState<FraudAlgorithm[]>([]);
   const [loadError, setLoadError] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
@@ -144,6 +145,15 @@ export default function FraudSidebar({ onRunAlgorithm, disabled }: FraudSidebarP
           >
             {showFlaggedOnly ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
             {showFlaggedOnly ? '전체 분개 보기' : '플래그된 분개만 보기'}
+          </button>
+          <button
+            onClick={onExportFlagged}
+            disabled={!flaggedDocNums || flaggedDocNums.size === 0}
+            title="플래그된 전표만 CSV로 내보냅니다"
+            className="flex items-center justify-center gap-1.5 text-xs font-semibold py-2 rounded-lg transition bg-emerald-700/80 hover:bg-emerald-600 text-white disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-3.5 h-3.5" />
+            플래그 CSV 내보내기
           </button>
         </div>
       )}

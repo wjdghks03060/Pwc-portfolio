@@ -3,12 +3,13 @@
 import React, { useState, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { useAuditStore, JournalEntry } from './store';
-import { Bot, BarChart3, TableProperties, Upload, FileSpreadsheet, Send, RotateCcw } from 'lucide-react';
+import { Bot, BarChart3, TableProperties, Upload, FileSpreadsheet, Send, RotateCcw, Download } from 'lucide-react';
 import MappingModal from './MappingModal';
 import LedgerGrid from './LedgerGrid';
 import FraudSidebar from './components/FraudSidebar';
 import Visualization, { DynamicChart } from './components/Visualization';
 import { apiUrl } from './lib/api';
+import { exportLedgerCsv } from './lib/exportCsv';
 
 const AI_WELCOME_MESSAGE =
   '안녕하세요, 회계사님! \n원장을 분석할 준비가 되었습니다.\n\n💡 추천 명령:\n1. "전기일자 6월 삼성전자 거래처를 추출해줘"\n2. "이걸 다시 월별 추이액 차트로 그려줘"';
@@ -21,6 +22,9 @@ export default function AuditDashboard() {
     setGlobalData,
     globalData,
     baseData,
+    filteredData,
+    flaggedDocNums,
+    fraudResult,
     restoreBaseData,
     setFraudCheckRunning,
     setFraudResult,
@@ -87,6 +91,45 @@ export default function AuditDashboard() {
     restoreBaseData();
     clearGridColumnFilters();
     setDynamicChart(null);
+  };
+
+  /** AG Grid 컬럼 필터까지 반영된 '지금 보이는' 행 */
+  const getVisibleGridRows = (): JournalEntry[] => {
+    const api = gridRef.current?.api;
+    if (!api) return filteredData;
+    const rows: JournalEntry[] = [];
+    api.forEachNodeAfterFilterAndSort((node) => {
+      if (node.data) rows.push(node.data);
+    });
+    return rows;
+  };
+
+  const handleExportVisibleCsv = () => {
+    const rows = getVisibleGridRows();
+    const condition = fraudResult
+      ? `화면표시|부정징후=${fraudResult.algorithm_name}`
+      : '화면표시(그리드 필터 포함)';
+    exportLedgerCsv(rows, {
+      prefix: 'ledger_export',
+      sourceFile: uploadedFileName,
+      condition,
+      label: fraudResult?.algorithm_name ?? 'grid',
+    });
+  };
+
+  const handleExportFlaggedCsv = () => {
+    if (!flaggedDocNums || flaggedDocNums.size === 0) {
+      alert('플래그된 분개가 없습니다. 먼저 부정징후 알고리즘을 실행해 주세요.');
+      return;
+    }
+    const source = baseData.length > 0 ? baseData : globalData;
+    const rows = source.filter((row) => flaggedDocNums.has(String(row.std_doc_num)));
+    exportLedgerCsv(rows, {
+      prefix: 'fraud_flagged',
+      sourceFile: uploadedFileName,
+      condition: fraudResult?.algorithm_name ?? '부정징후 플래그',
+      label: fraudResult?.algorithm_name ?? 'flagged',
+    });
   };
 
   const handleRunFraudCheck = async (algorithmId: string) => {
@@ -220,7 +263,11 @@ export default function AuditDashboard() {
   return (
     <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
 
-      <FraudSidebar onRunAlgorithm={handleRunFraudCheck} disabled={!uploadedFileName || !mapping} />
+      <FraudSidebar
+        onRunAlgorithm={handleRunFraudCheck}
+        onExportFlagged={handleExportFlaggedCsv}
+        disabled={!uploadedFileName || !mapping}
+      />
 
       <div className="flex flex-col flex-1 h-full p-4 gap-4 overflow-hidden min-w-0">
         <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-4 rounded-xl">
@@ -261,14 +308,25 @@ export default function AuditDashboard() {
               <h2 className="font-bold">원장 상세 그리드</h2>
             </div>
 
-            <button
-              onClick={handleResetFilters}
-              disabled={!canResetLedger}
-              className="flex items-center gap-1 text-xs bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-700 transition font-medium text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-              전체 필터 초기화
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleExportVisibleCsv}
+                disabled={filteredData.length === 0}
+                title="지금 그리드에 보이는 분개를 CSV로 내보냅니다"
+                className="flex items-center gap-1 text-xs bg-emerald-700/80 border border-emerald-600/50 px-3 py-1.5 rounded-lg hover:bg-emerald-600 transition font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Download className="w-3.5 h-3.5" />
+                CSV 내보내기
+              </button>
+              <button
+                onClick={handleResetFilters}
+                disabled={!canResetLedger}
+                className="flex items-center gap-1 text-xs bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-700 transition font-medium text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+                전체 필터 초기화
+              </button>
+            </div>
           </div>
           <div className="flex-1 w-full overflow-hidden rounded-lg">
              <LedgerGrid gridRef={gridRef} />
