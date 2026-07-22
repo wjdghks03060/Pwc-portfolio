@@ -223,8 +223,9 @@ export default function AuditDashboard() {
             const yKey = result.chart_y;
 
             const summary: Record<string, number> = {};
-            parsedData.forEach((row: Record<string, unknown>) => {
-              let xVal = String(row[xKey] ?? '기타');
+            parsedData.forEach((row) => {
+              const rowRecord = row as unknown as Record<string, unknown>;
+              let xVal = String(rowRecord[xKey] ?? '기타');
 
               if (xKey === 'std_date' && xVal !== '기타') {
                 const d = new Date(Number(xVal) || xVal);
@@ -232,7 +233,7 @@ export default function AuditDashboard() {
                   xVal = d.toISOString().substring(0, 7);
                 }
               }
-              summary[xVal] = (summary[xVal] || 0) + (Number(row[yKey]) || 0);
+              summary[xVal] = (summary[xVal] || 0) + (Number(rowRecord[yKey]) || 0);
             });
 
             const chartRows = Object.entries(summary)
