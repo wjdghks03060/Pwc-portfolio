@@ -38,7 +38,11 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="AI Audit Agent Backend")
 
-_allowed_origins = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000").split(",")
+_allowed_origins = [
+    origin.strip()
+    for origin in os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,

@@ -37,6 +37,40 @@ npm run dev
 
 브라우저에서 `http://localhost:3000` 접속 후, 원장 CSV 업로드 → 컬럼 매핑 → 좌측 사이드바에서 부정징후 알고리즘 클릭 순으로 사용합니다. (샘플 원장: `backend/temp_files/fdd_sample_general_ledger_300.csv`)
 
+## 웹 배포 (추천: Vercel + Render)
+
+프론트(Next.js)는 **Vercel**, 백엔드(FastAPI)는 **Render**에 올리는 구성을 기준으로 합니다.
+
+### 1) 백엔드 — Render
+
+1. [Render](https://render.com)에서 New → Blueprint (또는 Web Service)
+2. 이 GitHub 저장소 연결, 브랜치 `main`
+3. Blueprint를 쓰면 루트 `render.yaml`이 자동 적용됩니다. 수동이면:
+   - Root Directory: `backend`
+   - Build: `pip install -r requirements.txt`
+   - Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+4. Environment:
+   - `FRONTEND_ORIGIN` = Vercel 프론트 URL (예: `https://xxx.vercel.app`) — 여러 개면 쉼표 구분
+   - `OPENAI_API_KEY` = (선택) AI SQL 질의용
+   - `OPENAI_MODEL` = `gpt-4o-mini` (선택)
+5. 배포 후 Health: `https://<backend>.onrender.com/api/health`
+
+> Free 플랜은 디스크가 비영속이라 서버 sleep/재시작 시 업로드 CSV가 사라질 수 있습니다. 데모·포트폴리오 용도로는 충분합니다.
+
+### 2) 프론트 — Vercel
+
+1. [Vercel](https://vercel.com)에서 저장소 Import
+2. Root Directory: `frontend`
+3. Framework Preset: Next.js
+4. Environment Variable:
+   - `NEXT_PUBLIC_API_URL` = Render 백엔드 URL (예: `https://xxx.onrender.com`) — **끝에 `/` 없이**
+5. Deploy
+
+### 3) CORS 연결
+
+프론트 URL이 확정되면 Render의 `FRONTEND_ORIGIN`을 그 주소로 맞춘 뒤 백엔드를 Redeploy 하세요.  
+로컬과 같이 쓰려면 예: `https://xxx.vercel.app,http://localhost:3000`
+
 ## 주요 기능
 
 1. **원장 업로드 & 컬럼 매핑** — 어떤 CSV 스키마든 전표번호/전기일자/계정과목/거래처/차변/대변/적요 표준 필드로 매핑. 전표번호 열이 없으면 자동으로 `_row_id`가 생성되어 매핑에 사용할 수 있습니다.
